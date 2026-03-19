@@ -1,4 +1,3 @@
---Módulo combinacional que traduce los números internos para que se dibujen correctamente en los displays de tu placa.
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
