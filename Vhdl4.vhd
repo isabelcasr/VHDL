@@ -1,69 +1,73 @@
+--Utiliza el reloj de la fpga para saber si han pasado más de 2 segundos con el botón presionado
+
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
 
-entity facturacion is
-    Port ( clk          : in  STD_LOGIC; -- Entrada de reloj principal
-           tick_1s      : in  STD_LOGIC; -- Entrada del pulso de 1 segundo
-           sensor       : in  STD_LOGIC; -- 0 ocupado, 1 libre
-           alarma       : out STD_LOGIC; -- Led de alarma
-           felicidades  : out STD_LOGIC; -- Led de felicitación
-           seg_totales  : out integer); --Salida con el tiempo total para mostrar
-end facturacion;
+entity contador_control_unico is
+    Port ( clk       : in  STD_LOGIC;  -- Reloj principal de 50 MHz
+           tick_1s   : in  STD_LOGIC;  -- Pulso de 1 Hz
+           boton     : in  STD_LOGIC;  -- Entrada del único botón
+           u_seg     : out integer range 0 to 9; -- Salida de unidades de segundo
+           d_seg     : out integer range 0 to 5; -- Salida de decenas de segundo
+           u_min     : out integer range 0 to 9); -- Salida de unidades de minuto
+end contador_control_unico;
 
-architecture Behavioral of facturacion is
-    signal cuenta       : integer := 0; --Lleva la cuenta de segundos
-    signal timer_verde  : integer := 0; --controla cuánto tiempo dura encendido el led de felicitación
-    signal mostrar_feli : std_logic := '0'; --indica si debe mostrar la felicitación
-    signal estado_extra : std_logic := '0'; -- 0 es Tiempo normal y 1 es Tiempo extra
+architecture Behavioral of contador_control_unico is
+    signal corriendo : std_logic := '0'; -- Indica si el cronómetro está corriendo 1 o detenido 0
+    signal s1, m1    : integer range 0 to 9 := 0; -- s1 = unidades de segundo, m1 = unidades de minuto
+    signal s2        : integer range 0 to 5 := 0; -- s2 = decenas de segundo
+    
+    -- Señales para detectar el tiempo presionado
+    signal cuenta_pulso : integer := 0; -- Cuenta cuántos ciclos del reloj de 50 MHz dura la pulsación
+    signal boton_antes  : std_logic := '1'; -- Para detectar flancos
 begin
     process(clk)
     begin
         if rising_edge(clk) then
-            -- Caso 1: La persona sale del espacio o sea que switch en 1
-            if sensor = '1' then --indica que el espacio queda libre
-                if estado_extra = '0' and cuenta > 0 then
-                    mostrar_feli <= '1'; -- Activa la felicitación
-                    timer_verde  <= 0; --reinicia el temporizador del led de felicitación
+		  
+            if boton = '0' then -- Boton presionado
+                if cuenta_pulso < 100000000 then -- Mientras no llegue a 2 segundos
+                    cuenta_pulso <= cuenta_pulso + 1; -- Incrementa la cuenta de ciclos
                 end if;
-                cuenta <= 0; --reinicia el contador principal
-                estado_extra <= '0'; -- Regresa al estado de tiempo normal
-                alarma <= '0'; --y apaga la alarma
-            
-            -- Caso 2: La persona sigue ocupando el espacio el switch en 0
-            elsif tick_1s = '1' then --si el espacio sigue ocupado y llegó un pulso de un segundo
-                mostrar_feli <= '0'; -- ya apaga la felicitación mientras sigue ocupado
                 
-                -- Verificar en qué etapa está
-                if estado_extra = '0' then -- si aun está en la etapa de tiempo normal entonces
-                    -- Etapa 1 de los primeros 35 segundos
-                    if cuenta >= 34 then 
-                        cuenta <= 0;         --reinicia la cuenta a cero a los 35s para contar el tiempo extra
-                        estado_extra <= '1'; -- Cambiamos al estado de tiempo extra
-                    else -- si aún no llega a los 35s
-                        cuenta <= cuenta + 1;
-                    end if; 
-                else
-                    -- Etapa 2 del tiempo extra para facturación
-                    cuenta <= cuenta + 1; -- Ahora cuenta desde cero el tiempo extra
-                end if; --termina verificar la etapa
+                -- Si llega a 2 segundos (100 millones de ciclos a 50MHz)
+                if cuenta_pulso = 100000000 then
+                    s1 <= 0; s2 <= 0; m1 <= 0;-- Reinicia el tiempo mostrado a 0:00
+                    corriendo <= '0'; -- Detiene el cronómetro
+                end if;
+            else
+				
+                -- Si se suelta ANTES de los 2 segundos, es un start o stop
+                if boton_antes = '0' and cuenta_pulso < 100000000 then
+                    corriendo <= not corriendo; -- Alterna entre Start y Stop
+                end if;
+                cuenta_pulso <= 0; -- Reiniciar contador de pulso al soltar
             end if;
+            
+            boton_antes <= boton; -- Guardar estado para el siguiente ciclo
 
-            -- Control de la alarma, el led que se enciende solo en la etapa de tiempo extra
-            alarma <= estado_extra;
-
-            -- Temporizador de auto apagado a los 5s para el led de felicitación
-            if mostrar_feli = '1' then
-                if tick_1s = '1' then --cambia con cada pulso de 1 segundo
-                    if timer_verde < 5 then --si aún no llega a 5 sigue aumentando
-                        timer_verde <= timer_verde + 1;
-                    else
-                        mostrar_feli <= '0'; --apaga la felicitación
+            if tick_1s = '1' and corriendo = '1' then
+                if s1 = 9 then -- Si unidades de segundo llegó a 9
+                    s1 <= 0; -- Reinicia unidades de segundo
+                    if s2 = 5 then -- Si decenas de segundo llegó a 5
+                        s2 <= 0; -- Reinicia decenas de segundo
+                        if m1 = 9 then 
+                            m1 <= 0; -- Si minutos llegó a 9, vuelve a 0
+                        else 
+                            m1 <= m1 + 1; -- Si no, incrementa minutos
+                        end if;
+                    else 
+                        s2 <= s2 + 1; -- Incrementa decenas de segundo
                     end if;
+                else 
+                    s1 <= s1 + 1; -- Incrementa unidades de segundo
                 end if;
             end if;
         end if;
     end process;
-
-    felicidades <= mostrar_feli; --asigna la señal a la salida felicidades
-    seg_totales <= cuenta; -- envía elvalor actual de cuenta a la salida para los displays
+	 
+	u_seg <= s1; -- Unidades de segundo
+    d_seg <= s2; -- Decenas de segundo
+    u_min <= m1; -- Unidades de minuto
 end Behavioral;
